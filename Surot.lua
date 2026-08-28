@@ -1,0 +1,662 @@
+-- Script taken from https://xenoscripts.com website --
+
+-- services --
+local vim = game:GetService("VirtualInputManager")
+local players = game:GetService("Players")
+local TS = game:GetService("TweenService")
+local workspace = game:GetService("Workspace")
+local replicatedStorage = game:GetService("ReplicatedStorage")
+local runService = game:GetService("RunService")
+-- local player
+local player = players.LocalPlayer
+local character = player.Character or player.CharacterAdded:Wait()
+local humanoid = character:WaitForChild("Humanoid")
+local HRP = character:WaitForChild("HumanoidRootPart")
+-- flags --
+local tweening = false
+-- auto farm values --
+local index = 1
+ -- rayfield --
+ local Rayfield = loadstring(game:HttpGet('https://sirius.menu/rayfield'))()
+ local Window = Rayfield:CreateWindow({
+   Name = "Build A Boat For Treasure",
+   Icon = 0,
+   LoadingTitle = "Rayfield Interface Suite",
+   LoadingSubtitle = "by Sirius",
+   Theme = "Default",
+   ToggleUIKeybind = "G",
+   DisableRayfieldPrompts = false,
+   DisableBuildWarnings = false,
+   ConfigurationSaving = {
+      Enabled = true,
+      FolderName = "BABFT",
+      FileName = "Build A Boat Config"
+   },
+})
+-- list for special blocks like glue that have multiple welds
+local specialList = {"Glue"}
+--paths
+local blockData = player:WaitForChild("Data")
+local blocksFolder = workspace:WaitForChild("Blocks")
+-- variable to track paste percentage and show the player
+local pastePercent = 0
+-- variable to track how many used of each block there is ( doesnt scale with count unfortunately)
+local usedList = {}
+-- player input
+local selectedBase = nil
+local autofarm = false
+local rescaleClick = false
+local playerToBring = nil
+local ignoreAnchored = true
+local sitInMouseClickSeatToggle = false
+
+-- auto build
+local clipboard = nil
+local function getBlockID(name)
+    return blockData:FindFirstChild(name) and blockData:FindFirstChild(name).Value or 9 -- return 9 if block not found(WoodBlock)
+end
+
+local function setTransparency(transparencyWanted : number, block : Model) : ()
+    if not block then return end
+    if block.PPart.Transparency == transparencyWanted then return end
+    local calls = transparencyWanted / 0.25
+    local tool
+    if character:FindFirstChild("PropertiesTool") then
+        tool = character["PropertiesTool"]
+    else
+        humanoid:EquipTool(player.Backpack.PropertiesTool)
+        task.wait()
+        tool = character.PropertiesTool
+    end
+
+    local args = 
+    {
+        "Transparency",
+        {
+            block
+        }
+    }
+
+    task.spawn(function()
+        for i = 1,calls do
+            tool.SetPropertieRF:InvokeServer(unpack(args))
+        end
+    end)
+end
+
+local function setAnchored(block : Model)
+    if not block then return end
+    local tool
+    if character:FindFirstChild("PropertiesTool") then
+        tool = character["PropertiesTool"]
+    else
+        humanoid:EquipTool(player.Backpack.PropertiesTool)
+        task.wait()
+        tool = character.PropertiesTool
+    end
+
+    local args = 
+    {
+        "Anchored",
+        {
+            block
+        }
+    }
+    task.spawn(function()
+        tool.SetPropertieRF:InvokeServer(unpack(args))
+    end)
+end
+
+local function rescaleBlock(block:Model,newPos:CFrame,newSize:Vector3) : ()
+    if not block then 
+        print("Block Not Found, Function rescaleBlock")
+        return 
+    end
+    local tool
+    if character:FindFirstChild("ScalingTool") then
+        tool = character["ScalingTool"]
+    else
+        humanoid:EquipTool(player.Backpack.ScalingTool)
+        task.wait()
+        tool = character.ScalingTool
+    end
+
+    local args = 
+    {
+        block,
+        newSize,
+        newPos
+    }
+    task.spawn(function()
+        tool.RF:InvokeServer(unpack(args))
+    end)
+    
+end
+
+local function getPlayerZone(playerInstance : Player) : BasePart
+    
+    local teamColor = playerInstance.TeamColor
+    for _,v in pairs(workspace:GetChildren()) do
+        if v:FindFirstChild("TeamColor") and v.TeamColor.Value then
+            if v.TeamColor.Value == teamColor then
+                return v
+            end
+        end
+    end
+    print("Base Not Found for player: ".. playerInstance.Name)
+    return nil
+end
+
+local function placeBlock(name : string,pos : CFrame,relativeTo : BasePart,Anchored : boolean) : ()
+    local tool
+    if character:FindFirstChild("BuildingTool") then
+        tool = character["BuildingTool"]
+    else
+        humanoid:EquipTool(player.Backpack.BuildingTool)
+        task.wait()
+        tool = character.BuildingTool
+    end
+    if not relativeTo then relativeTo = getPlayerZone(player) end
+    local args = 
+    {
+        name,
+        getBlockID(name),
+        relativeTo,
+        relativeTo and relativeTo.CFrame:ToObjectSpace(pos) or CFrame.new(),
+        ignoreAnchored and true or Anchored,
+        pos,
+        false, -- since im not doing 2 place blocks for now(springs etc)
+    }
+    task.spawn(function()
+        tool.RF:InvokeServer(unpack(args))
+    end)
+end
+
+local function paintBlock(block : Model, color : Color3)
+    if not block then 
+        print("Block Not Found, function paintBlock")
+        return 
+    end
+    if not block:FindFirstChild("PPart") then 
+        print("Not PPart found for: ".. block.Name)
+        return
+    end
+    if block.PPart.Color == color then return end
+    local tool
+    if character:FindFirstChild("PaintingTool") then
+        tool = character["PaintingTool"]
+    else
+        humanoid:EquipTool(player.Backpack.PaintingTool)
+        task.wait()
+        tool = character.PaintingTool
+    end
+    local args = {
+        {
+            block,
+            color
+        }
+    }
+    task.spawn(function()
+        tool.RF:InvokeServer(args)
+    end)
+    
+end
+
+local function getJoint(model : Model) : JointInstance?
+    for _,v in pairs(model.PPart:GetChildren()) do
+        if v:IsA("Snap") or v:IsA("Weld") then
+            if v.Part1 then 
+                if not (v.Part1.Parent == model) then
+                    return v.Part1
+                end
+            else
+            end
+        end
+    end
+    return getPlayerZone(player)
+end
+
+local function getNewBlockPos(hisBase : BasePart?, block : Model, myBase : BasePart?) : CFrame
+    if not block or not block:FindFirstChild("PPart") then
+        warn("Block missing PPart:", block and block.Name or "nil")
+        return CFrame.new()
+    end
+
+    if not hisBase or not myBase then
+        return block.PPart.CFrame
+    end
+
+    local offset = hisBase.CFrame:ToObjectSpace(block.PPart.CFrame)
+    return myBase.CFrame * offset
+end
+
+
+local function copyBuild(blocks : Folder) : table
+    local t = {}
+    local myBase = getPlayerZone(player)
+    local hisBase = getPlayerZone(players:FindFirstChild(blocks.Name))
+
+    for _,block in ipairs(blocks:GetChildren()) do
+        if block:FindFirstChild("PPart") then
+            if not (getBlockID(block.Name) == 0 or (usedList[block.Name] or 0) > getBlockID(block.Name)) then 
+
+                    --[[
+                        print(
+                    "Block index: " .. index ..
+                    " | Name: " .. block.Name ..
+                    " | Position: " .. tostring(block.PPart.CFrame) ..
+                    " | Relative joint: " .. tostring(getJoint(block)) ..
+                    " | Anchored: " .. tostring(block.PPart.Anchored) ..
+                    " | Size: " .. tostring(block.PPart.Size) ..
+                    " | Color: " .. tostring(block.PPart.Color)
+                )]]
+                local relative = getJoint(block)
+                relative = relative == hisBase and myBase or relative
+                if usedList[block.Name] then
+                    usedList[block.Name] += 1
+                else
+                    usedList[block.Name] = 1
+                end
+                table.insert(t, {
+                    Name = block.Name,
+                    Pos = getNewBlockPos(hisBase, block, myBase),
+                    Relative = getPlayerZone(player),
+                    Transparency = block.PPart.Transparency,
+                    Anchored = block.PPart.Anchored,
+                    Size = block.PPart.Size,
+                    Color = block.PPart.Color
+                })
+            else
+                print("You Dont Have Enough: ".. block.Name .. "s")
+            end
+        else
+            print(block.Name.. " Didnt Have A PPart")
+        end
+    end
+    return t
+end
+
+local function getMissingBlocks(expectedList, createdList)
+    local missing = {}
+
+    for i, v in ipairs(expectedList) do
+        local found = false
+        for _, b in ipairs(createdList) do
+            if b and b:FindFirstChild("PPart") and (b.Name == v.Name) then
+                found = true
+                break
+            end
+        end
+        if not found then
+            table.insert(missing, {Index = i, Name = v.Name, Pos = v.Pos})
+        end
+    end
+
+    return missing
+end
+
+local function getBlock(expected, createdList)
+    local best = nil
+    local bestDist = math.huge
+
+    for _, b in ipairs(createdList) do
+        if b and b:FindFirstChild("PPart") and b.Name == expected.Name then
+            local dist = (b.PPart.Position - expected.Pos.Position).Magnitude
+            if dist < bestDist then
+                bestDist = dist
+                best = b
+            end
+        end
+    end
+
+    return best
+end
+
+local function getPlayerBase() : Folder
+    for _,child in pairs(blocksFolder:GetChildren()) do
+        if child.Name == player.Name then
+            return child
+        end
+    end
+end
+
+local function pasteBuild(t, folder)
+    pastePercent = 0
+    local childrenDebug = 0
+    local c
+    local blocks = {}
+    local tCount = #t
+    local lastPlaced = tick()
+    c = folder.ChildAdded:Connect(function(child)
+        childrenDebug += 1
+        lastPlaced = tick()
+    end) 
+    print("Started Placing Blocks")
+    for i,v in ipairs(t) do
+        placeBlock(v.Name,v.Pos,v.Relative,v.Anchored)
+        pastePercent += 50/tCount
+        if i % 20 == 0 then
+            task.wait(0.05)
+        end
+    end
+    repeat
+        task.wait(0.1)
+    until tick() - lastPlaced > 5
+    print("Children Count After Placing: "..childrenDebug .. " Expected: ".. tCount)
+    if  tCount - childrenDebug > 0 then
+        local missing = getMissingBlocks(t,blocks)
+        print("Missing" .. #missing .. "children which includes:")
+            for _, b in ipairs(missing) do
+                print("Index:", b.Index, "Name:", b.Name, "Position:", b.Pos.Position)
+            end
+    end
+    print("Started Painting And Rescaling")
+    local playerBaseList = folder:GetChildren()
+    for i,v in ipairs(t) do
+        local b = getBlock(v,playerBaseList)
+        rescaleBlock(b,v.Pos,v.Size)
+        paintBlock(b,v.Color)
+        setTransparency(v.Transparency,b)
+        if i % 20 == 0 then
+            task.wait(0.05)
+        end
+        pastePercent += 50/tCount
+    end
+    c:Disconnect()
+    pastePercent = 0
+end
+
+local function getPlayers()
+    local playersy = {}
+
+    for _,playery in pairs(game:GetService("Players"):GetChildren()) do
+        table.insert(playersy,playery.DisplayName)
+    end
+
+    return playersy
+end
+
+local function bringPlayer(playerToBring : Player , firstSeat : Seat, secondSeat : Seat) : ()
+    local originalPos = character:GetPivot()
+
+    local otherPlayerCharacter = playerToBring.Character
+    if not otherPlayerCharacter then
+        print("Other Player No Character Found")
+        return
+    end
+    local offset = firstSeat.CFrame:Inverse() * secondSeat.CFrame
+    repeat
+    local torso = otherPlayerCharacter:FindFirstChild("LowerTorso") or otherPlayerCharacter:FindFirstChild("Torso")
+    if torso then
+        local newPivot = torso.CFrame * offset:Inverse()
+        firstSeat:PivotTo(newPivot + Vector3.new(math.random(-1,1),math.random(-1,1),math.random(-1,1)))
+    end
+        task.wait(0.5)
+    until not otherPlayerCharacter.Parent or otherPlayerCharacter.Humanoid.SeatPart
+
+    firstSeat:PivotTo(originalPos)
+end
+
+local function getCar() : Model
+    return humanoid.SeatPart and humanoid.SeatPart.Parent or nil
+end
+
+local autoBuildTab = Window:CreateTab("Строительство","rewind")
+
+autoBuildTab:CreateButton({
+    Name = "Поставить деревянный блок",
+    Callback = function()
+        placeBlock("WoodBlock",HRP.CFrame,nil,true)
+    end,
+
+})
+
+autoBuildTab:CreateToggle({
+    Name = "Изменить размер блока (клик по блоку)",
+    Callback = function(Value)
+        rescaleClick = Value
+        print("Set rescaleClick to: "..tostring(Value))
+    end,
+})
+
+local mouse = player:GetMouse()
+
+mouse.Button1Down:Connect(function()
+    if rescaleClick then
+        if mouse.Target then
+            print(mouse.Target:GetFullName())
+            local ppart = mouse.Target
+            rescaleBlock(ppart.Parent,ppart.CFrame,Vector3.new(4,4,4))
+        end
+    end
+end)
+
+local function getRealName(DisplayNamey : string) : string
+    for _,v in pairs(players:GetChildren()) do
+        if v.DisplayName == DisplayNamey then return v.Name end
+    end
+    print("Player Not Found")
+    return nil
+end
+
+local dd = autoBuildTab:CreateDropdown({
+    Name = "Выберите базу игрока для копирования",
+    Options = getPlayers(),
+    CurrentOption = {"Ничего не выбрано"},
+    MultipleOptions = false,
+    Callback = function(Options)
+        local realName = getRealName(Options[1])
+        for _,folder in pairs(blocksFolder:GetChildren()) do
+            if folder.Name == realName then
+                selectedBase = folder
+            end
+        end
+    end,
+})
+
+players.PlayerAdded:Connect(function()
+    dd:Refresh(getPlayers())
+end)
+
+autoBuildTab:CreateButton({
+    Name = "Копировать базу",
+    Callback = function()
+        if selectedBase then
+            clipboard = copyBuild(selectedBase)
+        else
+            Rayfield:Notify({
+                Title = "Пожалуйста, выберите действующего игрока",
+                Content = "Либо игрок не выбран, либо он вышел",
+                Duration = 10,
+                Image = "alert-triangle"
+            })
+        end
+    end,
+})
+
+autoBuildTab:CreateButton({
+    Name = "Вставить базу",
+    Callback = function()
+        if clipboard then
+            pasteBuild(clipboard, getPlayerBase())
+        end
+    end,
+})
+
+local pasteStatus = autoBuildTab:CreateParagraph({
+    Title = "Прогресс автопостройки", 
+    Content = "0%"
+
+})
+
+-- updater
+task.spawn(function()
+    while task.wait(0.2) do
+        pasteStatus:Set({Title = "Прогресс автопостройки", Content = tostring(pastePercent) .. "%"})
+    end
+end)
+
+autoBuildTab:CreateSection("Настройки автопостройки")
+autoBuildTab:CreateToggle({
+    Name = "Игнорировать закрепление",
+    CurrentValue = true,
+    Callback = function(Value)
+        ignoreAnchored = Value
+    end,
+})
+
+local autoFarmTab = Window:CreateTab("Автофарм","rewind")
+
+autoFarmTab:CreateToggle({
+    Name = "Вкл/выкл автоФарм",
+    CurrentValue = false,
+    Callback = function(value)
+        autofarm = value
+    end,
+})
+
+local funTab = Window:CreateTab("Развлечения","rewind")
+
+local firstSeat = nil
+local secondSeat = nil
+
+funTab:CreateSection("Притянуть игрока")
+
+local dd2 = funTab:CreateDropdown({
+    Name = "Выберите игрока для блокировки или притягивания",
+    Options = getPlayers(),
+    CurrentOption = {"Ничего не выбрано"},
+    MultipleOptions = false,
+    Callback = function(Options)
+        local realName = getRealName(Options[1])
+        playerToBring = players:FindFirstChild(realName)
+    end,
+})
+
+players.PlayerAdded:Connect(function()
+    dd2:Refresh(getPlayers())
+end)
+
+funTab:CreateButton({
+    Name = "Сядьте на первое сиденье и нажмите",
+    Callback = function()
+        firstSeat = humanoid.SeatPart
+        print("firstSeat: "..firstSeat:GetFullName())
+    end,
+})
+
+funTab:CreateButton({
+    Name = "Сядьте на второе сиденье и нажмите",
+    Callback = function()
+        secondSeat = humanoid.SeatPart
+        print("secondSeat: "..secondSeat:GetFullName())
+    end,
+})
+
+funTab:CreateButton({
+    Name = "Притянуть игрока после выбора",
+    Callback = function()
+        if secondSeat and firstSeat then
+            if secondSeat ~= firstSeat then
+                if playerToBring then
+                    bringPlayer(playerToBring,firstSeat,secondSeat)
+                else
+                Rayfield:Notify({
+                    Name = "Пожалуйста, выберите игрока и попробуйте снова",
+                    Content = "Выберите действующего игрока!",
+                    Duration = 10,
+                    Image = "alert-triangle"
+                })
+                end
+            else
+            Rayfield:Notify({
+                Name = "Пожалуйста, выберите ДВА РАЗНЫХ сиденья перед повторной попыткой",
+                Content = "Выберите 2 разных сиденья, соединённых с одной базой, и попробуйте снова",
+                Duration = 10,
+                Image = "alert-triangle"
+            })
+            end
+        else
+            Rayfield:Notify({
+                Name = "Пожалуйста, выберите оба сиденья перед попыткой",
+                Content = "Выберите 2 разных сиденья, соединённых с одной базой, и попробуйте снова",
+                Duration = 10,
+                Image = "alert-triangle"
+            })
+        end
+    end,
+})
+
+
+funTab:CreateButton({
+    Name = "Полет на машине",
+    Callback = function()
+        local Players = game:GetService("Players")
+        local RunService = game:GetService("RunService")
+        local UserInputService = game:GetService("UserInputService")
+
+        local player = Players.LocalPlayer
+        local humanoid = player.Character and player.Character:FindFirstChildWhichIsA("Humanoid")
+
+        -- Flying variables
+        local flying = false
+        local flySpeed = 50
+        local flyConnection
+        local bv -- store BodyVelocity reference
+
+        -- Create GUI
+        local screenGui = Instance.new("ScreenGui")
+        screenGui.Name = "CarFlyGUI"
+        screenGui.Parent = player:WaitForChild("PlayerGui")
+        screenGui.ResetOnSpawn = false
+
+        local frame = Instance.new("Frame")
+        frame.Size = UDim2.new(0, 220, 0, 120)
+        frame.Position = UDim2.new(0.05, 0, 0.4, 0)
+        frame.BackgroundColor3 = Color3.fromRGB(163, 255, 137)
+        frame.Parent = screenGui
+
+        -- Fly toggle button
+        local toggleButton = Instance.new("TextButton")
+        toggleButton.Size = UDim2.new(0, 100, 0, 30)
+        toggleButton.Position = UDim2.new(0, 10, 0, 10)
+        toggleButton.Text = "Вкл/выкл полёт"
+        toggleButton.Parent = frame
+
+        -- Speed label
+        local speedLabel = Instance.new("TextLabel")
+        speedLabel.Size = UDim2.new(0, 50, 0, 30)
+        speedLabel.Position = UDim2.new(0, 120, 0, 10)
+        speedLabel.Text = tostring(flySpeed)
+        speedLabel.Parent = frame
+
+        -- Plus and minus buttons
+        local plusButton = Instance.new("TextButton")
+        plusButton.Size = UDim2.new(0, 30, 0, 30)
+        plusButton.Position = UDim2.new(0, 180, 0, 10)
+        plusButton.Text = "+"
+        plusButton.Parent = frame
+
+        local minusButton = Instance.new("TextButton")
+        minusButton.Size = UDim2.new(0, 30, 0, 30)
+        minusButton.Position = UDim2.new(0, 180, 0, 50)
+        minusButton.Text = "-"
+        minusButton.Parent = frame
+
+        -- Destroy button
+        local destroyButton = Instance.new("TextButton")
+        destroyButton.Size = UDim2.new(0, 100, 0, 30)
+        destroyButton.Position = UDim2.new(0, 10, 0, 80)
+        destroyButton.Text = "Удалить GUI"
+        destroyButton.BackgroundColor3 = Color3.fromRGB(255, 80, 80)
+        destroyButton.Parent = frame
+
+        -- Movement controls
+        local ctrl = {f=0, b=0, l=0, r=0}
+        UserInputService.InputBegan:Connect(function(input, processed)
+            if processed then return end
+            if input.KeyCode == Enum.KeyCode.W then ctrl.f = 1 end
+            if input.KeyCode == Enum.KeyCode.S then ctrl.b = -1 end
+            if input.KeyCode == Enum.KeyCode.A then ctrl.l = -1 end
+            if input.KeyCode == Enum.KeyCode.D then ctrl.r = 1 end
+   
